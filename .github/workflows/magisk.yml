@@ -104,7 +104,8 @@ jobs:
           sudo rm -rf *
       - name: Dependencies
         run: |
-          sudo apt-get update && sudo apt-get install setools lzip wine winetricks patchelf xvfb
+          sudo dpkg --add-architecture i386
+          sudo apt-get update && sudo apt-get install setools lzip wine winetricks patchelf xvfb wine32:i386
           sudo tar --wildcards -xf /tmp/repo.tar -C ~ --strip-component=2 '*/wine/*' '*/linker/*' '*/xml/*'
           xvfb-run wine wineboot --init
           xvfb-run winetricks msxml6
