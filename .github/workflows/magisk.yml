@@ -104,9 +104,10 @@ jobs:
           sudo rm -rf *
       - name: Dependencies
         run: |
-          sudo apt-get update && sudo apt-get install setools lzip wine winetricks patchelf
+          sudo apt-get update && sudo apt-get install setools lzip wine winetricks patchelf xvfb
           sudo tar --wildcards -xf /tmp/repo.tar -C ~ --strip-component=2 '*/wine/*' '*/linker/*' '*/xml/*'
-          winetricks msxml6
+          xvfb-run wine wineboot --init
+          xvfb-run winetricks msxml6
       - name: Download WSA
         shell: python
         run: |
