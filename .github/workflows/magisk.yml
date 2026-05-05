@@ -240,50 +240,119 @@ jobs:
           import os
           import json
           import requests
-
           magisk_apk = """${{ github.event.inputs.magisk_apk }}"""
-
           if not magisk_apk:
               magisk_apk = "stable"
-          if magisk_apk == "stable" or magisk_apk == "beta" or magisk_apk == "canary" or magisk_apk == "debug":
+          if magisk_apk in ["stable", "beta", "canary", "debug"]:
               magisk_apk = json.loads(requests.get(f"https://github.com/topjohnwu/magisk-files/raw/master/{magisk_apk}.json").content)['magisk']['link']
               
           out_file = "magisk.zip"
-
           arch = "${{ matrix.arch }}"
-
-          abi_map={"x64" : ["x86_64", "x86"], "arm64" : ["arm64-v8a", "armeabi-v7a"]}
-
+          abi_map = {"x64": ["x86_64", "x86"], "arm64": ["arm64-v8a", "armeabi-v7a"]}
           if not os.path.isfile(out_file):
+              print(f"Downloading Magisk from: {magisk_apk}", flush=True)
               urllib.request.urlretrieve(magisk_apk, out_file)
-
-          def extract_as(zip, name, as_name, dir):
-              info = zip.getinfo(name)
-              info.filename = as_name
-              zip.extract(info, dir)
-
+          # 先列出所有 magisk 相关文件，帮助调试
           with zipfile.ZipFile(out_file) as zip:
-              extract_as(zip, f"lib/{ abi_map[arch][0] }/libmagisk64.so", "magisk64", "magisk")
-              extract_as(zip, f"lib/{ abi_map[arch][1] }/libmagisk32.so", "magisk32", "magisk")
+              all_files = zip.namelist()
+              magisk_files = [f for f in all_files if 'magisk' in f.lower()]
+              print(f"All magisk-related files in zip ({len(magisk_files)}):", flush=True)
+              for f in magisk_files:
+                  print(f"  {f}", flush=True)
+          def find_in_zip(zip, candidates):
+              """在 zip 中查找第一个匹配的文件名"""
+              for name in candidates:
+                  try:
+                      info = zip.getinfo(name)
+                      print(f"  ✅ Found: {name}", flush=True)
+                      return info
+                  except KeyError:
+                      continue
+              return None
+          def extract_as(zip, possible_names, as_name, dir):
+              """带路径回退的提取函数"""
+              for name in possible_names:
+                  try:
+                      info = zip.getinfo(name)
+                      print(f"  ✅ Extracting {name} -> {dir}/{as_name}", flush=True)
+                      info.filename = as_name
+                      zip.extract(info, dir)
+                      return
+                  except KeyError:
+                      continue
+              # 都没找到，列出所有 magisk 文件帮助定位
+              all_magisk = [x for x in zip.namelist() if 'magisk' in x.lower()]
+              raise KeyError(
+                  f"Cannot find any of {possible_names} in zip.\n"
+                  f"Available magisk files: {all_magisk}"
+              )
+          with zipfile.ZipFile(out_file) as zip:
+              primary_abi = abi_map[arch][0]
+              secondary_abi = abi_map[arch][1]
+              # 尝试多个可能的路径变体
+              extract_as(zip, [
+                  f"lib/{primary_abi}/libmagisk64.so",
+                  f"lib/{primary_abi}/libmagisk.so",
+                  f"assets/libmagisk64.so",
+                  f"assets/libmagisk.so",
+              ], "magisk64", "magisk")
+              extract_as(zip, [
+                  f"lib/{secondary_abi}/libmagisk32.so",
+                  f"lib/{secondary_abi}/libmagisk.so",
+                  f"assets/libmagisk32.so",
+                  f"assets/libmagisk.so",
+              ], "magisk32", "magisk")
+              # 检查 magiskpolicy 是否独立存在
               standalone_policy = False
-              try:
-                zip.getinfo(f"lib/{ abi_map[arch][0] }/libmagiskpolicy.so")
-                standalone_policy = True
-              except:
-                pass
-              extract_as(zip, f"lib/{ abi_map[arch][0] }/libmagiskinit.so", "magiskinit", "magisk")
+              magiskpolicy_candidates = [
+                  f"lib/{primary_abi}/libmagiskpolicy.so",
+                  f"assets/libmagiskpolicy.so",
+              ]
+              for name in magiskpolicy_candidates:
+                  try:
+                      zip.getinfo(name)
+                      standalone_policy = True
+                      print(f"  ✅ Standalone magiskpolicy found at: {name}", flush=True)
+                      break
+                  except KeyError:
+                      continue
+              extract_as(zip, [
+                  f"lib/{primary_abi}/libmagiskinit.so",
+                  f"assets/libmagiskinit.so",
+              ], "magiskinit", "magisk")
               if standalone_policy:
-                extract_as(zip, f"lib/{ abi_map[arch][0] }/libmagiskpolicy.so", "magiskpolicy", "magisk")
+                  extract_as(zip, magiskpolicy_candidates, "magiskpolicy", "magisk")
               else:
-                extract_as(zip, f"lib/{ abi_map[arch][0] }/libmagiskinit.so", "magiskpolicy", "magisk")
-              extract_as(zip, f"lib/{ abi_map[arch][0] }/libmagiskboot.so", "magiskboot", "magisk")
-              extract_as(zip, f"lib/{ abi_map[arch][0] }/libbusybox.so", "busybox", "magisk")
+                  extract_as(zip, [
+                      f"lib/{primary_abi}/libmagiskinit.so",
+                      f"assets/libmagiskinit.so",
+                  ], "magiskpolicy", "magisk")
+              extract_as(zip, [
+                  f"lib/{primary_abi}/libmagiskboot.so",
+                  f"assets/libmagiskboot.so",
+              ], "magiskboot", "magisk")
+              extract_as(zip, [
+                  f"lib/{primary_abi}/libbusybox.so",
+                  f"assets/libbusybox.so",
+              ], "busybox", "magisk")
+              # x64 的 magiskpolicy（根目录下）
               if standalone_policy:
-                extract_as(zip, f"lib/{ abi_map['x64'][0] }/libmagiskpolicy.so", "magiskpolicy", ".")
+                  extract_as(zip, [
+                      f"lib/x86_64/libmagiskpolicy.so",
+                      f"assets/libmagiskpolicy.so",
+                  ], "magiskpolicy", ".")
               else:
-                extract_as(zip, f"lib/{ abi_map['x64'][0] }/libmagiskinit.so", "magiskpolicy", ".")
-              extract_as(zip, f"assets/boot_patch.sh", "boot_patch.sh", "magisk")
-              extract_as(zip, f"assets/util_functions.sh", "util_functions.sh", "magisk")
+                  extract_as(zip, [
+                      f"lib/x86_64/libmagiskinit.so",
+                      f"assets/libmagiskinit.so",
+                  ], "magiskpolicy", ".")
+              extract_as(zip, [
+                  f"assets/boot_patch.sh",
+              ], "boot_patch.sh", "magisk")
+              extract_as(zip, [
+                  f"assets/util_functions.sh",
+              ], "util_functions.sh", "magisk")
+              print("✅ All Magisk files extracted successfully!", flush=True)
       - name: Download OpenGApps
         if: ${{ github.event.inputs.gapps_variant != 'none' && github.event.inputs.gapps_variant != '' }}
         shell: python
